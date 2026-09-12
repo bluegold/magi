@@ -14,5 +14,5 @@ dependencies = []
 magi = "magi_decision.cli:main"
 
 [tool.setuptools]
-py-modules = ["magi", "magi_core"]
+package-dir = {"" = "src"}
 packages = ["magi_decision"]

@@ -1,1 +1,0 @@
-"""MAGI command package."""
