@@ -5,7 +5,15 @@ description: 判定criteriaを整理し、MAGIの複数人格による意思決�
 
 # MAGI Review
 
-Codexが判定依頼を受けたら、対象・背景・criteria・制約・選択肢を整理して、リポジトリ直下の `magi.py` にJSONを渡す。
+Codexが判定依頼を受けたら、対象・背景・criteria・制約・選択肢を整理して、下記の実行コマンドにJSONを渡す。
+
+実行コマンド:
+
+```bash
+python3 {{MAGI_EXECUTABLE}} <request.json> --mock
+```
+
+形式を確認した後、`OPENAI_API_KEY`が設定されている場合は`--mock`を外して実APIを実行する。
 
 ## 手順
 
@@ -24,4 +32,3 @@ Codexが判定依頼を受けたら、対象・背景・criteria・制約・選�
 ## 出力契約
 
 `analyses` にMELCHIOR、BALTHASAR、CASPERの個別分析、`judgment` に統合判定が入る。
-

@@ -10,6 +10,7 @@ import json
 import os
 import queue
 import re
+import shlex
 import sys
 import threading
 import time
@@ -17,6 +18,7 @@ import unicodedata
 import urllib.error
 import urllib.request
 from typing import Any, Callable
+from pathlib import Path
 
 
 PERSONAS = {
@@ -206,6 +208,39 @@ def make_judge_prompt(request: dict[str, Any], analyses: list[dict[str, str]]) -
 """
 
 
+def skill_install_path(scope: str) -> Path:
+    if scope == "repo":
+        root = Path(__file__).resolve().parent / ".agents" / "skills"
+    else:
+        root = Path.home() / ".agents" / "skills"
+    return root / "magi-review"
+
+
+def install_skill(scope: str) -> Path:
+    source = Path(__file__).resolve().parent / "skills" / "magi-review" / "SKILL.md"
+    target_dir = skill_install_path(scope)
+    template = source.read_text(encoding="utf-8")
+    executable = shlex.quote(str(Path(__file__).resolve()))
+    if "{{MAGI_EXECUTABLE}}" not in template:
+        raise RuntimeError("スキルテンプレートに{{MAGI_EXECUTABLE}}がありません")
+    installed = template.replace("{{MAGI_EXECUTABLE}}", executable)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / "SKILL.md").write_text(installed, encoding="utf-8")
+    return target_dir
+
+
+def uninstall_skill(scope: str) -> Path:
+    target_dir = skill_install_path(scope)
+    skill_file = target_dir / "SKILL.md"
+    if skill_file.exists():
+        skill_file.unlink()
+    try:
+        target_dir.rmdir()
+    except OSError:
+        pass
+    return target_dir
+
+
 def run_tui(request: dict[str, Any], model: str, mock: bool) -> tuple[list[dict[str, str]], str]:
     """Run MAGI with one live pane per persona and one pane for the judge."""
     events: queue.Queue[tuple[str, str]] = queue.Queue()
@@ -356,7 +391,11 @@ def run_tui(request: dict[str, Any], model: str, mock: bool) -> tuple[list[dict[
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="MAGI multi-perspective decision engine")
-    parser.add_argument("request", help="判定依頼JSON")
+    parser.add_argument("request", nargs="?", help="判定依頼JSON")
+    install_group = parser.add_mutually_exclusive_group()
+    install_group.add_argument("--install", action="store_true", help="Codexスキルをインストール")
+    install_group.add_argument("--uninstall", action="store_true", help="Codexスキルをアンインストール")
+    parser.add_argument("--scope", choices=("user", "repo"), default="user", help="スキルの配置先")
     parser.add_argument("--mock", action="store_true", help="APIを呼ばずに実行")
     parser.add_argument("--stream", action="store_true", help="各人格の回答をstderrへ逐次表示")
     parser.add_argument("--tui", action="store_true", help="人格ごとのペインで逐次表示")
@@ -364,7 +403,17 @@ def main() -> int:
     args = parser.parse_args()
     if args.stream and args.tui:
         parser.error("--streamと--tuiは同時に指定できません")
+    if (args.install or args.uninstall) and args.request:
+        parser.error("--install/--uninstallと判定依頼JSONは同時に指定できません")
+    if not (args.install or args.uninstall) and not args.request:
+        parser.error("判定依頼JSON、--install、または--uninstallを指定してください")
     try:
+        if args.install:
+            print(f"Installed skill: {install_skill(args.scope)}")
+            return 0
+        if args.uninstall:
+            print(f"Uninstalled skill: {uninstall_skill(args.scope)}")
+            return 0
         request = load_request(args.request)
         if args.tui:
             analyses, judge = run_tui(request, args.model, args.mock)
