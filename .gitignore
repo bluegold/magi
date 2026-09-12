@@ -3,3 +3,6 @@
 __pycache__/
 *.py[cod]
 .python-version
+.venv/
+build/
+*.egg-info/

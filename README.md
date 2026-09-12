@@ -39,6 +39,20 @@ python3 magi.py examples/decision.json
 
 最終結果はJSONとして標準出力に出力されます。
 
+## uvで実行する
+
+依存関係を分離した一時環境で実行する場合は、`uvx`を使えます。
+
+```bash
+uvx --from . magi examples/decision.json --mock
+```
+
+ローカル開発では、`uv run`でも実行できます。
+
+```bash
+uv run magi examples/decision.json --mock
+```
+
 ## 表示モード
 
 生成中の回答をターミナルへ逐次表示するには、`--stream`を指定します。進捗は標準エラー出力、最終JSONは標準出力に分かれます。

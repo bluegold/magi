@@ -9,7 +9,6 @@ import curses
 import json
 import os
 import queue
-import re
 import shlex
 import sys
 import threading
@@ -19,6 +18,8 @@ import urllib.error
 import urllib.request
 from typing import Any, Callable
 from pathlib import Path
+
+from magi_core import decision_status, load_request
 
 
 PERSONAS = {
@@ -47,38 +48,6 @@ def wrap_display(text: str, width: int) -> list[str]:
             current_width += char_width
         lines.append(current)
     return lines
-
-
-def decision_status(text: str) -> str:
-    """Extract a compact decision badge from an agent's answer."""
-    match = re.search(
-        r"(?:推奨案|推奨|結論)\s*[:：]\s*\**\s*(条件付き採用|採用|見送り|承認|否決)",
-        text,
-    )
-    if not match:
-        return "完了"
-    decision = match.group(1)
-    return {
-        "採用": "承認",
-        "承認": "承認",
-        "見送り": "否決",
-        "否決": "否決",
-        "条件付き採用": "条件付き",
-    }[decision]
-
-
-def load_request(path: str) -> dict[str, Any]:
-    with open(path, encoding="utf-8") as file:
-        request = json.load(file)
-    required = ("subject", "criteria")
-    missing = [key for key in required if not request.get(key)]
-    if missing:
-        raise ValueError(f"必須項目がありません: {', '.join(missing)}")
-    if not isinstance(request["criteria"], list):
-        raise ValueError("criteriaは配列で指定してください")
-    if any(not item.get("name") for item in request["criteria"]):
-        raise ValueError("criteriaの各要素にはnameが必要です")
-    return request
 
 
 def make_prompt(request: dict[str, Any], persona_name: str) -> str:
