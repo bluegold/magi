@@ -9,24 +9,15 @@ import curses
 import json
 import os
 import queue
-import shlex
 import sys
 import threading
 import time
 import unicodedata
-import urllib.error
-import urllib.request
 from typing import Any, Callable
-from pathlib import Path
-
 from .core import decision_status, load_request
-
-
-PERSONAS = {
-    "MELCHIOR": "技術責任者。実装可能性、保守性、性能、依存関係を重視する。",
-    "BALTHASAR": "リスク審査役。失敗条件、セキュリティ、運用負荷、反対材料を厳しく探す。",
-    "CASPER": "利用者・事業責任者。目的への適合性、利用者価値、期限、費用対効果を重視する。",
-}
+from .orchestrator import PERSONAS, make_judge_prompt, mock_response, run_agent
+from .provider import call_openai
+from .skill import install_skill, uninstall_skill
 
 
 def display_width(text: str) -> int:
@@ -48,175 +39,6 @@ def wrap_display(text: str, width: int) -> list[str]:
             current_width += char_width
         lines.append(current)
     return lines
-
-
-def make_prompt(request: dict[str, Any], persona_name: str) -> str:
-    criteria = json.dumps(request["criteria"], ensure_ascii=False)
-    constraints = json.dumps(request.get("constraints", []), ensure_ascii=False)
-    options = json.dumps(request.get("options", []), ensure_ascii=False)
-    return f"""あなたはMAGIの{persona_name}です。{PERSONAS[persona_name]}
-
-対象:
-{request['subject']}
-
-背景:
-{request.get('context', 'なし')}
-
-判定基準と重み:
-{criteria}
-
-制約:
-{constraints}
-
-選択肢:
-{options}
-
-各criteriaを0から100で評価し、根拠を短く示してください。
-最後に推奨案、確信度(0から1)、最大の懸念、追加確認事項を示してください。
-事実と推測を分け、情報不足は明記してください。"""
-
-
-def extract_text(response: dict[str, Any]) -> str:
-    if isinstance(response.get("output_text"), str):
-        return response["output_text"]
-    parts: list[str] = []
-    for item in response.get("output", []):
-        for content in item.get("content", []):
-            if isinstance(content.get("text"), str):
-                parts.append(content["text"])
-    if parts:
-        return "\n".join(parts)
-    raise ValueError("Responses APIの応答からテキストを取得できませんでした")
-
-
-def call_openai(prompt: str, model: str, on_delta: Callable[[str], None] | None = None) -> str:
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEYが設定されていません。確認には--mockを使えます")
-    body_data = {
-        "model": model,
-        "input": prompt,
-        "reasoning": {"effort": "low"},
-    }
-    if on_delta is not None:
-        body_data["stream"] = True
-    body = json.dumps(body_data).encode("utf-8")
-    request = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
-        data=body,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=120) as response:
-            if on_delta is None:
-                return extract_text(json.load(response))
-            text_parts: list[str] = []
-            for raw_line in response:
-                line = raw_line.decode("utf-8").strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    break
-                event = json.loads(data)
-                if event.get("type") == "response.output_text.delta":
-                    delta = event.get("delta", "")
-                    text_parts.append(delta)
-                    on_delta(delta)
-            return "".join(text_parts)
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"OpenAI API error ({error.code}): {detail[:500]}") from error
-
-
-def mock_response(persona_name: str, request: dict[str, Any]) -> str:
-    criteria = ", ".join(item["name"] for item in request["criteria"])
-    return (f"{persona_name}のモック判定。基準({criteria})を確認した。\n"
-            "推奨案: 条件付き採用\n確信度: 0.50\n"
-            "最大の懸念: 根拠資料が不足している。\n追加確認事項: 期限と互換性を検証する。")
-
-
-def run_agent(
-    name: str,
-    request: dict[str, Any],
-    model: str,
-    mock: bool,
-    on_delta: Callable[[str], None] | None = None,
-) -> dict[str, str]:
-    prompt = make_prompt(request, name)
-    if mock:
-        analysis = mock_response(name, request)
-        if on_delta is not None:
-            on_delta(analysis)
-        return {"persona": name, "analysis": analysis}
-    return {
-        "persona": name,
-        "analysis": call_openai(prompt, model, on_delta),
-    }
-
-
-def make_judge_prompt(request: dict[str, Any], analyses: list[dict[str, str]]) -> str:
-    return f"""あなたはMAGIの統合判定役です。
-対象: {request['subject']}
-判定基準: {json.dumps(request['criteria'], ensure_ascii=False)}
-制約: {json.dumps(request.get('constraints', []), ensure_ascii=False)}
-選択肢: {json.dumps(request.get('options', []), ensure_ascii=False)}
-
-3者の分析:
-{json.dumps(analyses, ensure_ascii=False, indent=2)}
-
-意見を単純多数決せず、根拠の質、criteriaとの整合性、意見の相違を比較してください。
-次の形式で日本語回答してください:
-結論:
-確信度:
-判断理由:
-各criteriaの評価:
-意見が割れた点:
-追加確認事項:
-"""
-
-
-def project_root() -> Path:
-    current = Path.cwd().resolve()
-    for candidate in (current, *current.parents):
-        if (candidate / "skills" / "magi-review" / "SKILL.md").exists():
-            return candidate
-    return Path(__file__).resolve().parents[2]
-
-
-def skill_install_path(scope: str) -> Path:
-    root = project_root() / ".agents" / "skills" if scope == "repo" else Path.home() / ".agents" / "skills"
-    return root / "magi-review"
-
-
-def install_skill(scope: str) -> Path:
-    root = project_root()
-    source = root / "skills" / "magi-review" / "SKILL.md"
-    target_dir = skill_install_path(scope)
-    template = source.read_text(encoding="utf-8")
-    executable_path = root / "magi.py"
-    if not executable_path.exists():
-        executable_path = Path(__file__).resolve()
-    executable = shlex.quote(str(executable_path))
-    if "{{MAGI_EXECUTABLE}}" not in template:
-        raise RuntimeError("スキルテンプレートに{{MAGI_EXECUTABLE}}がありません")
-    installed = template.replace("{{MAGI_EXECUTABLE}}", executable)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    (target_dir / "SKILL.md").write_text(installed, encoding="utf-8")
-    return target_dir
-
-
-def uninstall_skill(scope: str) -> Path:
-    target_dir = skill_install_path(scope)
-    skill_file = target_dir / "SKILL.md"
-    if skill_file.exists():
-        skill_file.unlink()
-    try:
-        target_dir.rmdir()
-    except OSError:
-        pass
-    return target_dir
 
 
 def run_tui(request: dict[str, Any], model: str, mock: bool) -> tuple[list[dict[str, str]], str]:
